@@ -149,10 +149,9 @@ def evaluate_operation(operation, evidence):
             "raw_value"
         )
 
-        if raw_connectivity in [
-            "DISCONNECTED",
-            "UNAVAILABLE",
-            None,
+        if raw_connectivity not in [
+            "CONNECTED_SMS",
+            "CONNECTED_DATA",
         ]:
 
             return {

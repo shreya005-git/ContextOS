@@ -49,6 +49,8 @@ operation_state = {
     "previous_evidence": {},
     "initial_evidence_plan": [],
     "initial_agent_reasoning": "",
+    "planning_fallback": False,
+    "assessment_type": "initial",
 }
 
 # ------------------------------------------------------------
@@ -86,12 +88,13 @@ def reset_demo():
     operation_state["previous_evidence"] = {}
     operation_state["initial_evidence_plan"] = []
     operation_state["initial_agent_reasoning"] = ""
+    operation_state["planning_fallback"] = False
+    operation_state["assessment_type"] = "initial"
 
     return {
         "status": "reset",
         "message": "ContextOS demo state has been reset.",
     }
-
 # ------------------------------------------------------------
 # FULL CONTEXTOS EVALUATION
 # ------------------------------------------------------------
@@ -200,6 +203,16 @@ def reassess():
     ] = result.get(
         "initial_agent_reasoning",
         operation_state["initial_agent_reasoning"],
+    )
+
+    operation_state["planning_fallback"] = result.get(
+        "planning_fallback",
+        operation_state["planning_fallback"],
+    )
+
+    operation_state["assessment_type"] = result.get(
+        "assessment_type",
+        operation_state["assessment_type"],
     )
 
     return result

@@ -12,6 +12,7 @@
 # ============================================================
 
 import json
+from datetime import datetime, timezone
 from typing import TypedDict, Dict, Any
 
 from dotenv import load_dotenv
@@ -66,6 +67,8 @@ def build_operation():
 class ContextState(TypedDict, total=False):
 
     operation: Dict[str, Any]
+
+    assessment_type: str
 
     evidence_plan: list
     agent_reasoning: str
@@ -199,28 +202,20 @@ def extract_response_text(response):
 # ============================================================
 
 def parse_evidence_plan(text):
-
     upper = text.upper()
+
+    tools_section = upper.split("TOOLS:", 1)[1] if "TOOLS:" in upper else ""
+
+    if "REASON:" in tools_section:
+        tools_section = tools_section.split("REASON:", 1)[0]
 
     selected = []
 
     for tool in SUPPORTED_TOOLS:
-
-        if tool in upper:
+        if tool in tools_section:
             selected.append(tool)
 
-    # An empty plan is valid during reassessment when
-    # Gemini determines that no additional evidence is needed.
-    if not selected:
-        return []
-
-    # Always keep predictable ordering.
-    return [
-        tool
-        for tool in SUPPORTED_TOOLS
-        if tool in selected
-    ]
-
+    return [tool for tool in SUPPORTED_TOOLS if tool in selected]
 
 # ============================================================
 # EXTRACT REASONING
@@ -236,6 +231,37 @@ def extract_reason(text):
         )[1].strip()
 
     return text.strip()
+
+def get_evidence_age(evidence):
+    collected_at = evidence.get("collected_at")
+
+    if not collected_at:
+        return "unknown"
+
+    try:
+        collected_time = datetime.fromisoformat(
+            collected_at
+        )
+
+        age_seconds = (
+            datetime.now(timezone.utc) - collected_time
+        ).total_seconds()
+
+        if age_seconds < 0:
+            return "unknown"
+
+        if age_seconds < 60:
+            return "less than 1 minute old"
+
+        age_minutes = int(age_seconds // 60)
+
+        if age_minutes == 1:
+            return "1 minute old"
+
+        return f"{age_minutes} minutes old"
+
+    except (ValueError, TypeError):
+        return "unknown"
 
 def build_plan_reason(tools, reassessment=False):
 
@@ -437,6 +463,7 @@ REASON: <brief explanation>
             "evidence_plan": tools,
             "agent_reasoning": reason,
             "planning_fallback": False,
+            "assessment_type": "initial",
             **(
                 {
                     "initial_evidence_plan": tools,
@@ -483,6 +510,7 @@ REASON: <brief explanation>
             "evidence_plan": fallback["evidence_plan"],
             "agent_reasoning": fallback["reason"],
             "planning_fallback": True,
+            "assessment_type": "initial",
             **(
                 {
                     "initial_evidence_plan": fallback["evidence_plan"],
@@ -722,6 +750,10 @@ def collect_evidence(
                 raw_result,
             )
 
+            evidence["location"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+
             if failure:
 
                 failures.append(
@@ -750,6 +782,10 @@ def collect_evidence(
                 raw_result,
             )
 
+            evidence["connectivity"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+
             if failure:
 
                 failures.append(
@@ -776,6 +812,10 @@ def collect_evidence(
             ] = normalize_evidence(
                 "SIM_CONTEXT",
                 raw_result,
+            )
+
+            evidence["sim_swap"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
             )
 
             if failure:
@@ -877,6 +917,12 @@ def reassess(
         {},
     )
 
+    evidence_freshness = {
+        key: get_evidence_age(value)
+        for key, value in previous_evidence.items()
+        if isinstance(value, dict)
+    }
+
     print("\n")
     print("=" * 60)
     print("CONTEXTOS REASSESSMENT")
@@ -919,6 +965,10 @@ PREVIOUSLY COLLECTED EVIDENCE:
 
 {json.dumps(previous_evidence, indent=2)}
 
+EVIDENCE FRESHNESS:
+
+{json.dumps(evidence_freshness, indent=2)}
+
 AVAILABLE NETWORK CAPABILITIES:
 
 LOCATION:
@@ -955,16 +1005,21 @@ RULES:
    Select it only when fresh evidence can materially
    improve the operational-context evaluation.
 
-9. If the existing evidence remains sufficient and no
+9. Consider evidence freshness when deciding what to refresh.
+   Older evidence may warrant fresh verification when its
+   current state is relevant, but do not refresh a capability
+   solely because it is older.
+
+10. If the existing evidence remains sufficient and no
    fresh signal would materially improve the assessment,
    return an empty TOOLS list.
 
-10. A SIM swap is an identity-context anomaly,
+11. A SIM swap is an identity-context anomaly,
     not automatic proof of fraud.
 
-11. Network evidence must be interpreted in operational context.
+12. Network evidence must be interpreted in operational context.
 
-12. The REASON must describe ONLY the capabilities listed in TOOLS.
+13. The REASON must describe ONLY the capabilities listed in TOOLS.
     Do not mention a capability unless it is selected.
 
 Return:
@@ -973,6 +1028,8 @@ TOOLS: <comma-separated tools>
 
 REASON: <brief explanation>
 """
+
+    planning_fallback = False
 
     try:
 
@@ -1029,6 +1086,8 @@ REASON: <brief explanation>
 
     except Exception as error:
 
+        planning_fallback = True
+
         print(
             "\n⚠️ GEMINI REASSESSMENT UNAVAILABLE"
         )
@@ -1070,7 +1129,7 @@ REASON: <brief explanation>
             reason
         )
 
-    # ========================================================
+    # ===========================a=============================
     # COLLECT NEW EVIDENCE
     # ========================================================
 
@@ -1111,6 +1170,10 @@ REASON: <brief explanation>
                 raw_result,
             )
 
+            new_evidence["location"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+
             if failure:
 
                 failures.append(
@@ -1139,6 +1202,10 @@ REASON: <brief explanation>
                 raw_result,
             )
 
+            new_evidence["connectivity"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+
             if failure:
 
                 failures.append(
@@ -1165,6 +1232,10 @@ REASON: <brief explanation>
             ] = normalize_evidence(
                 "SIM_CONTEXT",
                 raw_result,
+            )
+
+            new_evidence["sim_swap"]["collected_at"] = (
+                datetime.now(timezone.utc).isoformat()
             )
 
             if failure:
@@ -1243,6 +1314,8 @@ REASON: <brief explanation>
         "decision": decision,
         "agent_reasoning": reason,
         "evidence_plan": tools,
+        "assessment_type": "reassessment",
+        "planning_fallback": planning_fallback,
     }
 
 
